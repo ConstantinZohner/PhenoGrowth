@@ -1,0 +1,155 @@
+# Stem growth
+
+<br><br>
+
+## 1. Load packages
+
+```{r, message=FALSE, warning=FALSE}
+require(ggplot2)
+require(dplyr)
+require(nlme)
+require(viridis)
+require(data.table)
+require(stringr)
+require(broom)
+```
+
+<br>
+
+## 2. Load data	
+
+```{r}
+# define paths
+data.dir   = "/Users/consti/Desktop/PhD/Publication_material/10_PhenogrowthEx3/Rdata/Experiment"
+output.dir = "/Users/consti/Desktop/PhD/Publication_material/10_PhenogrowthEx3/Routput"
+
+#load data
+data       = read.table(paste(data.dir,"volume.csv",sep="/"), header=T, sep=",")
+
+Treatment = c("spring", "autumn-spring", "autumn", "control")
+data$Treatment = factor(data$Treatment, levels=Treatment)
+
+#define plot theme
+plotTheme = theme(legend.position   = "right",
+                  legend.background = element_rect(fill=NA, size=0.5, linetype="solid"),
+                  legend.text       = element_text(color="black"),
+                  panel.grid.major  = element_blank(),
+                  panel.grid.minor  = element_blank(),
+                  panel.background  = element_rect(colour = NA, size=1, fill="grey97"),
+                  axis.text.x       = element_text(angle = 45, hjust = 1),
+                  axis.line.y       = element_line(color = "black"),
+                  strip.background  = element_rect(fill=NA),
+                  strip.text        = element_text(colour = 'black'))
+```
+
+<br>
+
+## 3. Calculate stem and twig volumes and aggregate data
+
+```{r, warning=FALSE}
+#calculate volumes
+data$Volume = 1/3 * pi * data$Height *
+  ((data$StemDiameter/2)^2 + 
+     (data$StemDiameter/2)*(data$StemDiameterTop/2) + 
+     data$StemDiameterTop^2)
+                        
+#sum stem and twig volume measurements within individuals for each year
+VariablesVector = c("Volume")
+data = data.frame(data %>% 
+    group_by(Species,ID,Treatment,Year) %>% 
+    summarize_at(VariablesVector, sum, na.rm = TRUE))
+
+#sample sizes
+table(data$Treatment, data$Species)/4
+```
+
+<br>
+
+## 4. Annual growth
+
+```{r, warning=FALSE, message=FALSE, results="hide"}
+#####
+#Plot
+#####
+
+data$Species = factor(data$Species, levels=c("Quercus robur", "Fagus sylvatica", "Lonicera xylosteum"))
+pd  = position_dodge(0.2) 
+LinePlot = ggplot(data, aes(x=Year, y=Volume, colour=Treatment, group=Treatment)) + 
+    stat_summary(fun = mean, geom="line", position=pd) +
+    stat_summary(fun.data = "mean_se", size = 0.5, position=pd) +
+    labs(x = "Year", y = "Stem volume (cm3)") +
+    scale_color_manual(values=c("green3", "red3", "orange", "black")) +
+    coord_cartesian(ylim = c(8, 152))+
+    facet_grid(~Species) +
+    plotTheme 
+LinePlot
+
+
+#########
+#Save PDF
+#########
+
+pdf(paste(output.dir,"LinePlot.pdf",sep="/"), width=9, height=4, useDingbats=FALSE)
+LinePlot
+dev.off()
+```
+
+<br>
+
+## 5. Annual growth rates
+
+```{r, warning=FALSE}
+#############
+#Create table
+#############
+
+#from long (many rows) to short (multiple columns) format
+AnnualRate = dcast(data, Species + ID + Treatment ~ Year, value.var = "Volume")
+
+#get relative growth per year
+AnnualRate$relGrowth2017 = AnnualRate$`2018`-AnnualRate$`2017`
+AnnualRate$relGrowth2018 = AnnualRate$`2019`-AnnualRate$`2018`
+AnnualRate$relGrowth2019 = AnnualRate$`2020`-AnnualRate$`2019`
+
+#Melting to a long format
+AnnualRate = melt(AnnualRate[,c("Species","ID","Treatment","relGrowth2017","relGrowth2018","relGrowth2019")], 
+             id = c("Species","ID","Treatment"), value.name="StemVolumeIncrease")
+
+#Create year column (keep only last 4 characer in 'variable column')
+AnnualRate$Year = str_sub(AnnualRate$variable, 
+                          str_length(AnnualRate$variable)-3, 
+                          str_length(AnnualRate$variable))
+
+#delete variable column
+AnnualRate = select(AnnualRate, -c(variable))
+
+
+###########
+#Safe table
+###########
+
+write.table(AnnualRate, file=paste(data.dir, "AnnualGrowthRates.csv", sep="/"), 
+            col.names=TRUE, row.names=FALSE, sep=",")
+
+
+###########
+#Statistics
+###########
+
+#Extract linear model info
+resultsLM = AnnualRate %>% 
+    filter(Year != "2017") %>% #delete 2017 
+    group_by(Species) %>% 
+    do({model = lm(StemVolumeIncrease ~ Treatment+Year, data=.)  # create your model
+    data.frame(tidy(model),                # get coefficient info
+               glance(model))})            # get model info
+
+#keep only relevant info
+resultsLM = resultsLM %>%
+  filter(!term %in% c("(Intercept)", "Year2019")) %>% #delete intercept info
+  select(Species, term, estimate, p.value, adj.r.squared) #delete columns
+
+as.data.frame(resultsLM)
+```
+
+
